@@ -3,12 +3,21 @@ import streamlit as st
 from langchain.memory import ConversationBufferMemory
 from langchain_ollama import ChatOllama
 from langchain.prompts import ChatPromptTemplate
+from langchain.prompts import PromptTemplate
+from langchain.chains import ConversationalRetrievalChain ## corrigir
+from langchain.chains import create_retrieval_chain
+from langchain_community.vectorstores import FAISS 
+from langchain.chains.combine_documents import create_stuff_documents_chain
+from langchain_text_splitters import RecursiveCharacterTextSplitter
+from langchain_ollama import OllamaEmbeddings ## Testar
 from loaders import *
 
 ## TODO Avaliar criação de retriever, custo do tempo 
 ## TODO Adicionar botão para apagar conversa
 ## TODO criar abas: agente de análise de dados
 ## TODO pensar nome
+## TODO limpar templates nao utilizados
+## Escolher embedding mais leve
 
 # CONFIGURAÇÕES INICIAIS
 
@@ -18,9 +27,11 @@ CONFIG_MODELOS = "llama3.2:1b"
 
 MEMORIA = ConversationBufferMemory()
 
+
 ## Carregamento de arquivos
 
 def carrega_arquivos(tipo_arquivo, arquivo):
+    print(f"TIPO E ARQUIVO: {tipo_arquivo}, {arquivo}")
     if tipo_arquivo == 'Site':
         documento = carregador_site(arquivo)
     if tipo_arquivo == 'Vídeo do YouTube':
@@ -28,9 +39,11 @@ def carrega_arquivos(tipo_arquivo, arquivo):
     if tipo_arquivo == 'Wikipedia':
         documento = carregador_wikipedia(arquivo)
     if tipo_arquivo == 'PDF':
+        print(arquivo)
         with tempfile.NamedTemporaryFile(suffix='.pdf', delete=False) as temp:
             temp.write(arquivo.read())
             nome_temp = temp.name
+            print(nome_temp)
         documento = carregador_pdf(nome_temp)
     if tipo_arquivo == 'CSV':
         with tempfile.NamedTemporaryFile(suffix='.csv', delete=False) as temp:
@@ -43,8 +56,6 @@ def carrega_arquivos(tipo_arquivo, arquivo):
             nome_temp = temp.name
         documento = carregador_texto(nome_temp)
     return documento
-
-## Retriever
 
 
 
@@ -62,9 +73,66 @@ def carrega_modelo(tipo_arquivo, arquivo):
     Returns:
         None
     """
+
+    chat = ChatOllama(model=CONFIG_MODELOS)
+
+    memoria = ConversationBufferMemory()
+
+    ## Load documentos
+
     documento = carrega_arquivos(tipo_arquivo, arquivo)
 
-    retriever = criar_retriever(documento)
+    ## Text splitter
+
+    text_splitter = RecursiveCharacterTextSplitter(chunk_size = 1000, chunk_overlap= 200)
+
+    splits = text_splitter.split_documents(documento)
+
+    ## Vector Store
+
+    vectorsore = FAISS.from_documents(documents=splits, embedding=OllamaEmbeddings(model="nomic-embed-text:latest"))
+
+    ## Retriever
+
+    retriever = vectorsore.as_retriever()
+
+    system_prompt = """
+            Você é um assistente especializado da Fundação Hospitalar do Estado de Minas Gerais (FHEMIG), projetado para dar suporte aos servidores da instituição.
+
+            INSTRUÇÕES PRINCIPAIS:
+            1. Forneça respostas precisas e profissionais baseadas nos documentos fornecidos
+            2. Mantenha um tom cordial e respeitoso
+            3. Se não tiver certeza sobre alguma informação, indique claramente
+            4. Priorize a clareza e objetividade nas respostas
+                                                
+            HISTÓRICO:
+            {history}
+
+            CONTEXTO FORNECIDO:
+            {context}
+
+            DÚVIDA/SOLICITAÇÃO DO SERVIDOR:
+            {input}
+
+            DIRETRIZES DE RESPOSTA:
+            - Baseie suas respostas apenas no contexto fornecido e conhecimentos gerais sobre administração pública
+            - Caso a pergunta esteja fora do escopo dos documentos, indique isso ao usuário
+            - Sempre que possível, cite a seção específica do documento que fundamenta sua resposta
+            - Se necessitar de informações adicionais para uma resposta completa, solicite-as ao usuário
+
+            """
+    
+    prompt =  ChatPromptTemplate.from_messages(
+        [
+            ("system", system_prompt),
+            ("user", "{input}")
+        ]
+        )  ## Trocar contexto para retriever
+
+    question_aswner_chain = create_stuff_documents_chain(chat, prompt)
+    rag_chain = create_retrieval_chain(retriever, question_aswner_chain)
+
+    #rag_chain = create_retrieval_chain()
 
     system_message = '''Você é um assistente amigável chamado Oráculo.
     Você possui acesso às seguintes informações vindas 
@@ -81,18 +149,17 @@ def carrega_modelo(tipo_arquivo, arquivo):
     Se a informação do documento for algo como "Just a moment...Enable JavaScript and cookies to continue" 
     sugira ao usuário carregar novamente o Oráculo!'''.format(tipo_arquivo, documento)
 
-    print(system_message)
+    
 
-    template = ChatPromptTemplate.from_messages([
+    template_2 = ChatPromptTemplate.from_messages([
         ('system', system_message),
         ('placeholder', '{chat_history}'),
         ('user', '{input}')
     ])
 
-    chat = ChatOllama(model=CONFIG_MODELOS)
-    chain = template | chat
+    chain_2 = template_2 | chat
 
-    st.session_state['chain'] = chain
+    st.session_state['chain'] = rag_chain
 
 
 
@@ -114,11 +181,11 @@ def pagina_chat():
     é então mostrada na lista de mensagens.
 
     """
-    st.header('FHacil', divider=True)
+    st.header('BOT', divider=True)
 
     st.markdown(
         """
-        # Bem vindo ao FHacil
+        # Bem vindo ao BOT
 
         """
     )
@@ -139,8 +206,7 @@ def pagina_chat():
         chat.markdown(input_usuario)
         chat = st.chat_message('ai')
         resposta = chat.write_stream(chain.stream({
-            'input': input_usuario, 
-            'chat_history': memoria.buffer_as_messages
+            'input': input_usuario
             }))
        
         memoria.chat_memory.add_user_message(input_usuario)

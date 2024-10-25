@@ -69,6 +69,7 @@ def carregador_pdf(caminho):
     Returns:
         str: O conteúdo do PDF em forma de string.
     """
+    print(caminho)
     loader = PyMuPDFLoader(caminho)
     lista_documentos = loader.load()
     documento = '\n\n'.join([doc.page_content for doc in lista_documentos])
