@@ -5,7 +5,7 @@ from langchain_ollama import ChatOllama
 from langchain.prompts import ChatPromptTemplate
 from loaders import *
 
-## TODO Avaliar criação de retriever, custo do tempo
+## TODO Avaliar criação de retriever, custo do tempo 
 ## TODO Adicionar botão para apagar conversa
 ## TODO criar abas: agente de análise de dados
 ## TODO pensar nome
@@ -14,12 +14,85 @@ from loaders import *
 
 TIPOS_ARQUIVOS_VALIDOS = ['PDF', 'CSV', 'Texto', 'Site', 'Vídeo do YouTube', 'Wikipedia']
 
-CONFIG_MODELOS = {"Ollama":
-                  {"modelos": ["llama3.2:1b"]}}
+CONFIG_MODELOS = "llama3.2:1b"
 
 MEMORIA = ConversationBufferMemory()
 
 ## Carregamento de arquivos
+
+def carrega_arquivos(tipo_arquivo, arquivo):
+    if tipo_arquivo == 'Site':
+        documento = carregador_site(arquivo)
+    if tipo_arquivo == 'Vídeo do YouTube':
+        documento = carregador_youtube(arquivo)
+    if tipo_arquivo == 'Wikipedia':
+        documento = carregador_wikipedia(arquivo)
+    if tipo_arquivo == 'PDF':
+        with tempfile.NamedTemporaryFile(suffix='.pdf', delete=False) as temp:
+            temp.write(arquivo.read())
+            nome_temp = temp.name
+        documento = carregador_pdf(nome_temp)
+    if tipo_arquivo == 'CSV':
+        with tempfile.NamedTemporaryFile(suffix='.csv', delete=False) as temp:
+            temp.write(arquivo.read())
+            nome_temp = temp.name
+        documento = carregador_csv(nome_temp)
+    if tipo_arquivo == 'Texto':
+        with tempfile.NamedTemporaryFile(suffix='.txt', delete=False) as temp:
+            temp.write(arquivo.read())
+            nome_temp = temp.name
+        documento = carregador_texto(nome_temp)
+    return documento
+
+## Retriever
+
+
+
+## Chain
+
+def carrega_modelo(tipo_arquivo, arquivo):
+
+    """
+    Carrega um modelo de IA e o configura para ser usado com a interface.
+
+    Args:
+        tipo_arquivo (str): O tipo de arquivo a ser carregado.
+        arquivo (bytes): O conteúdo do arquivo a ser carregado.
+
+    Returns:
+        None
+    """
+    documento = carrega_arquivos(tipo_arquivo, arquivo)
+
+    retriever = criar_retriever(documento)
+
+    system_message = '''Você é um assistente amigável chamado Oráculo.
+    Você possui acesso às seguintes informações vindas 
+    de um documento {}: 
+
+    ####
+    {}
+    ####
+
+    Utilize as informações fornecidas para basear as suas respostas.
+
+    Sempre que houver $ na sua saída, substita por S.
+
+    Se a informação do documento for algo como "Just a moment...Enable JavaScript and cookies to continue" 
+    sugira ao usuário carregar novamente o Oráculo!'''.format(tipo_arquivo, documento)
+
+    print(system_message)
+
+    template = ChatPromptTemplate.from_messages([
+        ('system', system_message),
+        ('placeholder', '{chat_history}'),
+        ('user', '{input}')
+    ])
+
+    chat = ChatOllama(model=CONFIG_MODELOS)
+    chain = template | chat
+
+    st.session_state['chain'] = chain
 
 
 
@@ -50,30 +123,29 @@ def pagina_chat():
         """
     )
 
-    #chain = st.session_state.get('chain')
-    #if chain is None:
-    #    st.error('Carrege o Oráculo')
-    #    st.stop()
+    chain = st.session_state.get('chain')
+    if chain is None:
+        st.error('Carrege o BOT')
+        st.stop()
 
     memoria = st.session_state.get('memoria', MEMORIA)
     for mensagem in memoria.buffer_as_messages:
         chat = st.chat_message(mensagem.type)
         chat.markdown(mensagem.content)
 
-    #input_usuario = st.chat_input('Fale com o oráculo')
-    #if input_usuario:
-    #    chat = st.chat_message('human')
-    #    chat.markdown(input_usuario)
-
-    #    chat = st.chat_message('ai')
-    #    resposta = chat.write_stream(chain.stream({
-    #        'input': input_usuario, 
-    #        'chat_history': memoria.buffer_as_messages
-    #        }))
-        
-    #    memoria.chat_memory.add_user_message(input_usuario)
-    #    memoria.chat_memory.add_ai_message(resposta)
-    #    st.session_state['memoria'] = memoria
+    input_usuario = st.chat_input('Fale com o BOT')
+    if input_usuario:
+        chat = st.chat_message('human')
+        chat.markdown(input_usuario)
+        chat = st.chat_message('ai')
+        resposta = chat.write_stream(chain.stream({
+            'input': input_usuario, 
+            'chat_history': memoria.buffer_as_messages
+            }))
+       
+        memoria.chat_memory.add_user_message(input_usuario)
+        memoria.chat_memory.add_ai_message(resposta)
+        st.session_state['memoria'] = memoria
 
 
 ## SIDEBAR
@@ -105,6 +177,11 @@ def sidebar():
             arquivo = st.file_uploader('Faça o upload do arquivo csv', type=['.csv'])
         if tipo_arquivo == 'Texto':
             arquivo = st.file_uploader('Faça o upload do arquivo txt', type=['.txt'])
+
+        if st.button('Inicializar Oráculo', use_container_width=True):
+            carrega_modelo(tipo_arquivo, arquivo)
+        if st.button('Apagar Histórico de Conversa', use_container_width=True):
+            st.session_state['memoria'] = MEMORIA
 
 ## Run
 def main():

@@ -121,3 +121,6 @@ def carregador_csv(caminho):
     lista_documentos = loader.load()
     documento = '\n\n'.join([doc.page_content for doc in lista_documentos])
     return documento
+
+def criar_retriever(documento):
+    pass
